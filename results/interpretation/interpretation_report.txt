@@ -1,0 +1,49 @@
+==================================================
+FEATURE IMPORTANCE ANALYSIS
+==================================================
+              feature  importance
+             kmer_AAT    0.035426
+             kmer_GGT    0.033081
+             kmer_GAT    0.032042
+             kmer_ATC    0.030817
+             kmer_ACT    0.030041
+             kmer_AGA    0.028322
+             kmer_TCC    0.028289
+serotype_label_DENV-3    0.028172
+           gc_content    0.027546
+             kmer_TCT    0.027385
+             kmer_CCC    0.027314
+             kmer_TGG    0.024636
+             kmer_AAA    0.024583
+             kmer_ATG    0.024558
+             kmer_GCA    0.020051
+             kmer_TAC    0.020019
+             kmer_TTG    0.019864
+             kmer_ACA    0.019503
+             kmer_TTT    0.019225
+             kmer_CCA    0.018934
+
+==================================================
+BIOLOGICAL INTERPRETATION
+==================================================
+              feature  importance                   biological_interpretation
+             kmer_AAT    0.035426       k-mer frequencies - Sequence patterns
+             kmer_GGT    0.033081       k-mer frequencies - Sequence patterns
+             kmer_GAT    0.032042       k-mer frequencies - Sequence patterns
+             kmer_ATC    0.030817       k-mer frequencies - Sequence patterns
+             kmer_ACT    0.030041       k-mer frequencies - Sequence patterns
+             kmer_AGA    0.028322       k-mer frequencies - Sequence patterns
+             kmer_TCC    0.028289       k-mer frequencies - Sequence patterns
+serotype_label_DENV-3    0.028172                               Other feature
+           gc_content    0.027546 GC Content - Overall nucleotide composition
+             kmer_TCT    0.027385       k-mer frequencies - Sequence patterns
+             kmer_CCC    0.027314       k-mer frequencies - Sequence patterns
+             kmer_TGG    0.024636       k-mer frequencies - Sequence patterns
+             kmer_AAA    0.024583       k-mer frequencies - Sequence patterns
+             kmer_ATG    0.024558       k-mer frequencies - Sequence patterns
+             kmer_GCA    0.020051       k-mer frequencies - Sequence patterns
+             kmer_TAC    0.020019       k-mer frequencies - Sequence patterns
+             kmer_TTG    0.019864       k-mer frequencies - Sequence patterns
+             kmer_ACA    0.019503       k-mer frequencies - Sequence patterns
+             kmer_TTT    0.019225       k-mer frequencies - Sequence patterns
+             kmer_CCA    0.018934       k-mer frequencies - Sequence patterns

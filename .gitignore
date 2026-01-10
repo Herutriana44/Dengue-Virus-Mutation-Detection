@@ -1,0 +1,44 @@
+venv
+
+__pycache__
+
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzw
+*.pyzwz
+*.pyzwzw
+*.pyzwzwz
+
+# all __pycache__ folders in other directories
+__pycache__/
+src/__pycache__/
+
+# all .pyc files in other directories
+*.pyc
+src/__pycache__/*.pyc
+
+# all .pyo files in other directories
+*.pyo
+src/__pycache__/*.pyo
+
+# all .pyd files in other directories
+*.pyd
+src/__pycache__/*.pyd
+
+# all .pyw files in other directories
+*.pyw
+src/__pycache__/*.pyw
+
+# all .pyz files in other directories
+*.pyz
+src/__pycache__/*.pyz
+
+# all .pywz files in other directories
+*.pywz
+src/__pycache__/*.pywz
+
+log.txt
