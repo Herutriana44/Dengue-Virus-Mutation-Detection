@@ -1,5 +1,7 @@
 # Dengue Virus Mutation Detection - ML Pipeline
 
+Dataset didapat menggunakan kode menggunakan link [google colab ini](https://colab.research.google.com/drive/1CE1BqGXitpgmoiQsubzX_7wK7gcgz-xG?usp=sharing)
+
 Pipeline Machine Learning lengkap untuk deteksi mutasi Dengue virus, genotipe baru, dan potensi serotipe baru berdasarkan dataset tabular.
 
 ## Struktur Pipeline
