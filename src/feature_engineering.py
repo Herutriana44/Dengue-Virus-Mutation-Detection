@@ -111,7 +111,8 @@ class FeatureEngineer:
         
         return df_encoded
     
-    def prepare_features(self, df, target_column='serotype', exclude_columns=None):
+    def prepare_features(self, df, target_column='serotype', exclude_columns=None, 
+                        expected_feature_names=None):
         """
         Prepare features untuk ML
         
@@ -119,6 +120,7 @@ class FeatureEngineer:
             df: DataFrame dengan semua data
             target_column: Kolom target (tidak akan di-scale)
             exclude_columns: Kolom yang harus di-exclude
+            expected_feature_names: List feature names yang diharapkan (untuk inference)
             
         Returns:
             X: Feature matrix
@@ -169,13 +171,52 @@ class FeatureEngineer:
         for col in X.columns:
             X[col] = pd.to_numeric(X[col], errors='coerce').fillna(0)
         
-        self.feature_names = list(X.columns)
+        # If expected_feature_names is provided (for inference), align features
+        if expected_feature_names is not None:
+            X = self._align_features(X, expected_feature_names)
+            # Ensure exact column order matches expected_feature_names
+            X = X[expected_feature_names]
+            self.feature_names = expected_feature_names
+        else:
+            self.feature_names = list(X.columns)
         
         logger.info(f"Final feature matrix shape: {X.shape}")
         if y is not None:
             logger.info(f"Target distribution:\n{y.value_counts()}")
         
         return X, y, self.feature_names
+    
+    def _align_features(self, X, expected_feature_names):
+        """
+        Align features dengan expected feature names (untuk inference)
+        
+        Args:
+            X: Feature matrix dari inference data
+            expected_feature_names: List feature names yang diharapkan dari training
+            
+        Returns:
+            X_aligned: Feature matrix dengan kolom yang sesuai dengan expected_feature_names
+        """
+        logger.info("Aligning features with expected feature names...")
+        
+        # Create DataFrame dengan expected feature names
+        X_aligned = pd.DataFrame(0, index=X.index, columns=expected_feature_names)
+        
+        # Copy values dari X untuk kolom yang ada di kedua
+        common_cols = set(X.columns) & set(expected_feature_names)
+        for col in common_cols:
+            X_aligned[col] = X[col].values
+        
+        # Log kolom yang ditambahkan (dengan nilai 0) dan dihapus
+        missing_cols = set(expected_feature_names) - set(X.columns)
+        extra_cols = set(X.columns) - set(expected_feature_names)
+        
+        if missing_cols:
+            logger.info(f"Added {len(missing_cols)} missing columns (filled with 0): {list(missing_cols)[:10]}...")
+        if extra_cols:
+            logger.warning(f"Removed {len(extra_cols)} extra columns not in training: {list(extra_cols)[:10]}...")
+        
+        return X_aligned
     
     def scale_features(self, X_train, X_test=None, fit=True):
         """
@@ -191,6 +232,31 @@ class FeatureEngineer:
         """
         logger.info("Scaling features...")
         
+        # If scaler was already fitted, ensure columns match
+        if not fit:
+            # Determine expected columns from scaler or preprocessor
+            expected_cols = None
+            
+            # Try to get from scaler's feature_names_in_ (sklearn 1.0+)
+            if hasattr(self.scaler, 'feature_names_in_') and self.scaler.feature_names_in_ is not None:
+                expected_cols = list(self.scaler.feature_names_in_)
+            # Fallback to preprocessor feature names
+            elif self.feature_names:
+                expected_cols = self.feature_names
+            
+            # Align columns if needed
+            if expected_cols is not None:
+                if list(X_train.columns) != expected_cols:
+                    logger.info(f"Aligning columns before scaling: {len(X_train.columns)} -> {len(expected_cols)}")
+                    X_train = self._align_features(X_train, expected_cols)
+                    # Ensure exact match after alignment - reorder columns
+                    X_train = X_train[expected_cols]
+                    logger.info(f"Columns after alignment: {len(X_train.columns)}, match: {list(X_train.columns) == expected_cols}")
+                else:
+                    logger.info("Columns already match expected feature names")
+            else:
+                logger.warning("No expected columns found! Scaling may fail.")
+        
         if fit:
             X_train_scaled = pd.DataFrame(
                 self.scaler.fit_transform(X_train),
@@ -198,16 +264,80 @@ class FeatureEngineer:
                 index=X_train.index
             )
         else:
+            # For inference: ensure we use numpy array and preserve column order
+            # Get expected columns for output DataFrame
+            expected_cols = None
+            if hasattr(self.scaler, 'feature_names_in_') and self.scaler.feature_names_in_ is not None:
+                expected_cols = list(self.scaler.feature_names_in_)
+            elif self.feature_names:
+                expected_cols = self.feature_names
+            else:
+                expected_cols = list(X_train.columns)
+            
+            # CRITICAL: Ensure columns match exactly before converting to numpy
+            # This is important because sklearn checks feature names even with numpy arrays
+            # if the scaler was fitted with a DataFrame
+            if list(X_train.columns) != expected_cols:
+                logger.warning(f"Columns still don't match! Re-aligning: {len(X_train.columns)} vs {len(expected_cols)}")
+                X_train = self._align_features(X_train, expected_cols)
+                X_train = X_train[expected_cols]
+            
+            # Verify columns match
+            if list(X_train.columns) != expected_cols:
+                raise ValueError(
+                    f"Feature names mismatch! Expected {len(expected_cols)} features, "
+                    f"got {len(X_train.columns)}. First 5 expected: {expected_cols[:5]}, "
+                    f"first 5 got: {list(X_train.columns)[:5]}"
+                )
+            
+            # Convert to numpy array to avoid feature name checking
+            X_train_array = X_train.values
+            
+            # Verify shape matches
+            if X_train_array.shape[1] != len(expected_cols):
+                raise ValueError(
+                    f"Shape mismatch! Array has {X_train_array.shape[1]} features, "
+                    f"expected {len(expected_cols)}"
+                )
+            
+            # Transform using numpy array
+            X_train_scaled_array = self.scaler.transform(X_train_array)
+            
+            # Create DataFrame with expected columns
             X_train_scaled = pd.DataFrame(
-                self.scaler.transform(X_train),
-                columns=X_train.columns,
+                X_train_scaled_array,
+                columns=expected_cols,
                 index=X_train.index
             )
         
         if X_test is not None:
+            # Align X_test columns too
+            if not fit:
+                expected_cols = None
+                if hasattr(self.scaler, 'feature_names_in_') and self.scaler.feature_names_in_ is not None:
+                    expected_cols = list(self.scaler.feature_names_in_)
+                elif self.feature_names:
+                    expected_cols = self.feature_names
+                
+                if expected_cols is not None:
+                    if list(X_test.columns) != expected_cols:
+                        X_test = self._align_features(X_test, expected_cols)
+                        X_test = X_test[expected_cols]
+            
+            # Get expected columns for output
+            expected_cols = None
+            if hasattr(self.scaler, 'feature_names_in_') and self.scaler.feature_names_in_ is not None:
+                expected_cols = list(self.scaler.feature_names_in_)
+            elif self.feature_names:
+                expected_cols = self.feature_names
+            else:
+                expected_cols = list(X_test.columns)
+            
+            X_test_array = X_test.values
+            X_test_scaled_array = self.scaler.transform(X_test_array)
             X_test_scaled = pd.DataFrame(
-                self.scaler.transform(X_test),
-                columns=X_test.columns,
+                X_test_scaled_array,
+                columns=expected_cols,
                 index=X_test.index
             )
             return X_train_scaled, X_test_scaled

@@ -52,8 +52,10 @@ class InferencePipeline:
                 # Also store in baseline_classifier for label encoder access
                 self.baseline_classifier.best_model = model_data['model']
                 self.baseline_classifier.best_model_name = model_data['model_name']
+                # Load label encoder if available (for XGBoost)
                 if 'label_encoder' in model_data:
                     self.baseline_classifier.label_encoder = model_data['label_encoder']
+                    logger.info("Loaded label encoder for XGBoost")
                 logger.info(f"Loaded baseline model: {model_data['model_name']}")
         else:
             logger.warning(f"Baseline model not found at {baseline_path}")
@@ -75,6 +77,14 @@ class InferencePipeline:
             logger.info("Loaded open-set detector")
         else:
             logger.warning(f"Open-set detector not found at {open_set_path}")
+        
+        # Load preprocessor (important for feature alignment)
+        preprocessor_path = self.models_dir.parent / 'preprocessor.pkl'
+        if preprocessor_path.exists():
+            self.feature_engineer.load_preprocessor(str(preprocessor_path))
+            logger.info("Loaded preprocessor for feature alignment")
+        else:
+            logger.warning(f"Preprocessor not found at {preprocessor_path}. Feature alignment may fail.")
         
         logger.info("Model loading completed")
     
@@ -119,16 +129,49 @@ class InferencePipeline:
         # or if it's the model itself
         model_to_use = self.baseline_model
         label_encoder = None
+        model_name = None
         
-        # Try to get label encoder from BaselineClassifier if available
-        if hasattr(self, 'baseline_classifier') and hasattr(self.baseline_classifier, 'label_encoder'):
-            label_encoder = self.baseline_classifier.label_encoder
+        # Get model name and label encoder from BaselineClassifier if available
+        if hasattr(self, 'baseline_classifier'):
+            if hasattr(self.baseline_classifier, 'label_encoder'):
+                label_encoder = self.baseline_classifier.label_encoder
+            if hasattr(self.baseline_classifier, 'best_model_name'):
+                model_name = self.baseline_classifier.best_model_name
         
-        # Handle XGBoost label encoding
-        if label_encoder is not None:
+        logger.info(f"Using model: {model_name}, has label_encoder: {label_encoder is not None}")
+        
+        # Only use label encoder for XGBoost models
+        # Other models (Random Forest) predict string labels directly
+        if model_name == 'xgboost' and label_encoder is not None:
+            # XGBoost uses encoded labels, need to decode
             y_pred_encoded = model_to_use.predict(X)
-            y_pred = label_encoder.inverse_transform(y_pred_encoded)
+            
+            # Check if label encoder has classes
+            if not hasattr(label_encoder, 'classes_') or label_encoder.classes_ is None:
+                logger.warning("Label encoder has no classes. Using predictions as-is.")
+                y_pred = y_pred_encoded
+            else:
+                # Check if predictions are within valid range
+                max_class_idx = len(label_encoder.classes_) - 1
+                valid_indices = (y_pred_encoded >= 0) & (y_pred_encoded <= max_class_idx)
+                
+                if not np.all(valid_indices):
+                    invalid_indices = np.where(~valid_indices)[0]
+                    logger.warning(f"Found {len(invalid_indices)} predictions outside valid range [0, {max_class_idx}]. "
+                                 f"First few invalid values: {y_pred_encoded[invalid_indices][:5]}")
+                    # Clip to valid range
+                    y_pred_encoded = np.clip(y_pred_encoded, 0, max_class_idx)
+                
+                # Decode predictions
+                try:
+                    y_pred = label_encoder.inverse_transform(y_pred_encoded.astype(int))
+                except ValueError as e:
+                    logger.error(f"Error decoding predictions: {e}")
+                    logger.error(f"Predicted values: {np.unique(y_pred_encoded)}")
+                    logger.error(f"Label encoder classes: {label_encoder.classes_}")
+                    raise
         else:
+            # Random Forest or other models predict string labels directly
             y_pred = model_to_use.predict(X)
         
         if return_proba and hasattr(model_to_use, 'predict_proba'):
@@ -210,18 +253,45 @@ class InferencePipeline:
             logger.info("Running baseline classification...")
             
             # Use feature engineer to prepare features
-            # Need to load preprocessor if available
-            preprocessor_path = self.models_dir.parent / 'preprocessor.pkl'
-            if preprocessor_path.exists():
-                self.feature_engineer.load_preprocessor(str(preprocessor_path))
+            # Preprocessor should already be loaded in load_models()
+            if self.feature_engineer.feature_names:
+                expected_feature_names = self.feature_engineer.feature_names
+                logger.info(f"Using {len(expected_feature_names)} expected feature names from preprocessor")
+            else:
+                logger.warning("No preprocessor found! Feature alignment may fail.")
+                expected_feature_names = None
             
             self.feature_engineer.group_features(df)
             X_baseline, _, feature_names = self.feature_engineer.prepare_features(
-                df, target_column='serotype'  # May not exist, that's OK
+                df, 
+                target_column='serotype',  # May not exist, that's OK
+                expected_feature_names=expected_feature_names  # Use expected features from training
             )
+            
+            logger.info(f"Prepared features: {X_baseline.shape}, feature names: {len(feature_names)}")
+            if expected_feature_names:
+                columns_match = list(X_baseline.columns) == expected_feature_names
+                logger.info(f"Feature names match: {columns_match}")
+                if not columns_match:
+                    logger.warning(f"Feature names don't match! Will align before scaling.")
+                    logger.info(f"Expected: {len(expected_feature_names)} features")
+                    logger.info(f"Got: {len(X_baseline.columns)} features")
+                    # Show first few mismatches
+                    if len(X_baseline.columns) > 0 and len(expected_feature_names) > 0:
+                        missing = set(expected_feature_names) - set(X_baseline.columns)
+                        extra = set(X_baseline.columns) - set(expected_feature_names)
+                        if missing:
+                            logger.warning(f"Missing columns (first 5): {list(missing)[:5]}")
+                        if extra:
+                            logger.warning(f"Extra columns (first 5): {list(extra)[:5]}")
             
             # Scale features (use existing scaler from training)
             if self.feature_engineer.scaler is not None:
+                # Ensure feature names are set correctly before scaling
+                if expected_feature_names and not self.feature_engineer.feature_names:
+                    self.feature_engineer.feature_names = expected_feature_names
+                    logger.info("Set feature_names in feature_engineer for scaling")
+                
                 X_baseline_scaled = self.feature_engineer.scale_features(
                     X_baseline, fit=False  # Use existing scaler
                 )
