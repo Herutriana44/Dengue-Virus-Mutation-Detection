@@ -237,16 +237,92 @@ class InferencePipeline:
             'sample_id': df['sample_id'].values if 'sample_id' in df.columns else None
         }
         
+        # Ensure df has all columns needed for feature extraction
+        # Add missing columns that might be needed for extract_features
+        exclude_cols = ['sample_id', 'description', 'serotype', 'genotype', 
+                       'country', 'year', 'host', 'is_complete', 'region',
+                       'serotype_label', 'genotype_label', 'known_genotype']
+        
+        # For novelty/open-set, we need to ensure all expected features exist BEFORE extract_features
+        # This ensures extract_features can find all needed columns
+        if 'novelty' in tasks and self.novelty_detector:
+            if hasattr(self.novelty_detector.scaler, 'feature_names_in_') and self.novelty_detector.scaler.feature_names_in_ is not None:
+                expected_novelty_cols = list(self.novelty_detector.scaler.feature_names_in_)
+                logger.info(f"Adding {len(expected_novelty_cols)} expected novelty features to df")
+                # Add missing columns with default values
+                for col in expected_novelty_cols:
+                    if col not in df.columns:
+                        if col.startswith('kmer_'):
+                            df[col] = 0.0
+                        elif 'mutation' in col.lower() or 'mut' in col.lower() or 'length_diff' in col.lower():
+                            df[col] = 0.0
+                        elif col == 'gc_content':
+                            df[col] = df.get('gc_content', 0.0)
+                        elif col == 'genome_length':
+                            df[col] = df.get('genome_length', 0)
+                        else:
+                            df[col] = 0.0
+        
+        if 'open_set' in tasks and self.open_set_detector:
+            if hasattr(self.open_set_detector.scaler, 'feature_names_in_') and self.open_set_detector.scaler.feature_names_in_ is not None:
+                expected_open_set_cols = list(self.open_set_detector.scaler.feature_names_in_)
+                logger.info(f"Adding {len(expected_open_set_cols)} expected open-set features to df")
+                # Add missing columns with default values
+                for col in expected_open_set_cols:
+                    if col not in df.columns:
+                        if col.startswith('kmer_'):
+                            df[col] = 0.0
+                        elif 'mutation' in col.lower() or 'mut' in col.lower() or 'length_diff' in col.lower():
+                            df[col] = 0.0
+                        elif col == 'gc_content':
+                            df[col] = df.get('gc_content', 0.0)
+                        elif col == 'genome_length':
+                            df[col] = df.get('genome_length', 0)
+                        else:
+                            df[col] = 0.0
+        
         # Extract features (same as training)
         if 'novelty' in tasks or 'open_set' in tasks:
             # For novelty/open-set, extract specific features
             if 'novelty' in tasks and self.novelty_detector:
                 X_novelty, feature_cols_novelty = self.novelty_detector.extract_features(df)
-                X_novelty_scaled = self.novelty_detector.scaler.transform(X_novelty)
+                
+                # Align features with scaler's expected features
+                if hasattr(self.novelty_detector.scaler, 'feature_names_in_') and self.novelty_detector.scaler.feature_names_in_ is not None:
+                    expected_cols = list(self.novelty_detector.scaler.feature_names_in_)
+                    if list(X_novelty.columns) != expected_cols:
+                        logger.info(f"Aligning novelty features: {len(X_novelty.columns)} -> {len(expected_cols)}")
+                        X_novelty_aligned = pd.DataFrame(0, index=X_novelty.index, columns=expected_cols)
+                        common_cols = set(X_novelty.columns) & set(expected_cols)
+                        for col in common_cols:
+                            X_novelty_aligned[col] = X_novelty[col].values
+                        X_novelty = X_novelty_aligned[expected_cols]
+                        # Ensure exact column order
+                        X_novelty = X_novelty[expected_cols]
+                
+                # Convert to numpy array to avoid feature name checking
+                X_novelty_array = X_novelty.values
+                X_novelty_scaled = self.novelty_detector.scaler.transform(X_novelty_array)
             
             if 'open_set' in tasks and self.open_set_detector:
                 X_open_set, feature_cols_open_set = self.open_set_detector.extract_features(df)
-                X_open_set_scaled = self.open_set_detector.scaler.transform(X_open_set)
+                
+                # Align features with scaler's expected features
+                if hasattr(self.open_set_detector.scaler, 'feature_names_in_') and self.open_set_detector.scaler.feature_names_in_ is not None:
+                    expected_cols = list(self.open_set_detector.scaler.feature_names_in_)
+                    if list(X_open_set.columns) != expected_cols:
+                        logger.info(f"Aligning open-set features: {len(X_open_set.columns)} -> {len(expected_cols)}")
+                        X_open_set_aligned = pd.DataFrame(0, index=X_open_set.index, columns=expected_cols)
+                        common_cols = set(X_open_set.columns) & set(expected_cols)
+                        for col in common_cols:
+                            X_open_set_aligned[col] = X_open_set[col].values
+                        X_open_set = X_open_set_aligned[expected_cols]
+                        # Ensure exact column order
+                        X_open_set = X_open_set[expected_cols]
+                
+                # Convert to numpy array to avoid feature name checking
+                X_open_set_array = X_open_set.values
+                X_open_set_scaled = self.open_set_detector.scaler.transform(X_open_set_array)
         
         # Baseline classification
         if 'baseline' in tasks and self.baseline_model:
@@ -257,6 +333,23 @@ class InferencePipeline:
             if self.feature_engineer.feature_names:
                 expected_feature_names = self.feature_engineer.feature_names
                 logger.info(f"Using {len(expected_feature_names)} expected feature names from preprocessor")
+                
+                # Before feature engineering, ensure df has all columns needed
+                # Extract column names that come from one-hot encoding (e.g., host_Aedes aegypti)
+                onehot_prefixes = ['host_', 'country_', 'region_']
+                for feat_name in expected_feature_names:
+                    # Check if this is a one-hot encoded column
+                    for prefix in onehot_prefixes:
+                        if feat_name.startswith(prefix):
+                            # This is a one-hot encoded column
+                            # Extract the original column name and value
+                            original_col = prefix.rstrip('_')
+                            encoded_value = feat_name.replace(prefix, '')
+                            
+                            # If the original column doesn't exist or has wrong values, we need to handle it
+                            # But we can't set it to a specific value because we don't know what was in training
+                            # Instead, we'll let feature engineering handle it and align afterwards
+                            break
             else:
                 logger.warning("No preprocessor found! Feature alignment may fail.")
                 expected_feature_names = None
@@ -267,6 +360,16 @@ class InferencePipeline:
                 target_column='serotype',  # May not exist, that's OK
                 expected_feature_names=expected_feature_names  # Use expected features from training
             )
+            
+            # After prepare_features, align with expected feature names
+            if expected_feature_names and list(X_baseline.columns) != expected_feature_names:
+                logger.info(f"Aligning baseline features after prepare_features: {len(X_baseline.columns)} -> {len(expected_feature_names)}")
+                X_baseline_aligned = pd.DataFrame(0, index=X_baseline.index, columns=expected_feature_names)
+                common_cols = set(X_baseline.columns) & set(expected_feature_names)
+                for col in common_cols:
+                    X_baseline_aligned[col] = X_baseline[col].values
+                X_baseline = X_baseline_aligned[expected_feature_names]
+                logger.info(f"Aligned features: {len(X_baseline.columns)} columns")
             
             logger.info(f"Prepared features: {X_baseline.shape}, feature names: {len(feature_names)}")
             if expected_feature_names:

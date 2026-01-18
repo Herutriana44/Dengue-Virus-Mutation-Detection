@@ -72,7 +72,7 @@ class FeatureEngineer:
         
         return self.feature_groups
     
-    def encode_categorical(self, df, columns, method='onehot'):
+    def encode_categorical(self, df, columns, method='onehot', expected_feature_names=None):
         """
         Encode categorical features
         
@@ -80,6 +80,7 @@ class FeatureEngineer:
             df: DataFrame
             columns: List kolom kategorikal
             method: 'onehot' atau 'label'
+            expected_feature_names: List expected feature names (untuk inference, untuk alignment)
             
         Returns:
             DataFrame dengan encoded features
@@ -93,6 +94,19 @@ class FeatureEngineer:
             if method == 'onehot':
                 # One-hot encoding
                 dummies = pd.get_dummies(df[col], prefix=col, drop_first=True)
+                
+                # If expected_feature_names provided (inference), align one-hot columns
+                if expected_feature_names is not None:
+                    # Find all expected columns for this categorical column
+                    expected_cols_for_this = [f for f in expected_feature_names if f.startswith(f"{col}_")]
+                    
+                    # Create DataFrame with expected columns only
+                    dummies_aligned = pd.DataFrame(0, index=dummies.index, columns=expected_cols_for_this)
+                    common_cols = set(dummies.columns) & set(expected_cols_for_this)
+                    for c in common_cols:
+                        dummies_aligned[c] = dummies[c].values
+                    dummies = dummies_aligned
+                
                 df_encoded = pd.concat([df_encoded.drop(columns=[col]), dummies], axis=1)
                 logger.info(f"One-hot encoded: {col} -> {len(dummies.columns)} features")
                 
@@ -108,7 +122,7 @@ class FeatureEngineer:
                         df[col].astype(str).fillna('unknown')
                     )
                 logger.info(f"Label encoded: {col}")
-        
+                
         return df_encoded
     
     def prepare_features(self, df, target_column='serotype', exclude_columns=None, 
@@ -153,8 +167,9 @@ class FeatureEngineer:
         logger.info(f"Numerical features: {len(numerical_cols)}")
         logger.info(f"Categorical features: {len(categorical_cols)}")
         
-        # Encode categorical
-        df_processed = self.encode_categorical(df, categorical_cols, method='onehot')
+        # Encode categorical (pass expected_feature_names for alignment during encoding)
+        df_processed = self.encode_categorical(df, categorical_cols, method='onehot', 
+                                               expected_feature_names=expected_feature_names)
         
         # Get final feature columns (exclude target and sample_id)
         final_feature_cols = [col for col in df_processed.columns 
