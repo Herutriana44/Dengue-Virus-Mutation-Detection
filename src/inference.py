@@ -90,24 +90,69 @@ class InferencePipeline:
     
     def prepare_input_data(self, input_data, is_dataframe=True):
         """
-        Prepare input data untuk inference
+        Prepare input data untuk inference.
+        Mendukung format GISAID (Sequence, Accession ID, AA Substitutions).
         
         Args:
             input_data: DataFrame atau path ke CSV file
             is_dataframe: True jika input_data adalah DataFrame, False jika path
             
         Returns:
-            Prepared DataFrame
+            Prepared DataFrame dengan features
         """
         if not is_dataframe:
-            # Load from CSV
             df = pd.read_csv(input_data)
         else:
             df = input_data.copy()
         
-        # Ensure sample_id exists
+        # Map GISAID format -> pipeline format
+        # Join key GISAID: NCBI Accession ID (bukan Accession ID)
         if 'sample_id' not in df.columns:
-            df['sample_id'] = range(len(df))
+            ncbicol = 'NCBI Accession ID' if 'NCBI Accession ID' in df.columns else None
+            if ncbicol and df[ncbicol].notna().any():
+                df['sample_id'] = df[ncbicol].fillna(df.get('Accession ID', '')).astype(str)
+            elif 'Accession ID' in df.columns:
+                df['sample_id'] = df['Accession ID']
+            else:
+                df['sample_id'] = [f'SAMPLE_{i+1:04d}' for i in range(len(df))]
+        
+        # Jika punya Sequence tapi belum punya features, extract dari envelope_sequence
+        seq_col = 'Sequence' if 'Sequence' in df.columns else 'sequence'
+        env_col = 'envelope_sequence' if 'envelope_sequence' in df.columns else None
+        if (seq_col in df.columns or env_col) and 'gc_content' not in df.columns:
+            logger.info("Extracting features from envelope_sequence (deteksi mutasi)...")
+            from sequence_feature_extractor import extract_features_from_sequences
+            from gisaid_preprocessor import parse_aa_substitutions, _extract_envelope_sequence, ENVELOPE_REF_LEN
+            
+            if env_col:
+                seq_df = df[['sample_id', env_col]].copy()
+                seq_df = seq_df.rename(columns={env_col: 'sequence'})
+            else:
+                # GISAID: extract envelope dari full Sequence
+                envelope_seqs = df[seq_col].fillna('').apply(_extract_envelope_sequence)
+                seq_df = pd.DataFrame({'sample_id': df['sample_id'], 'sequence': envelope_seqs})
+            
+            features_df = extract_features_from_sequences(seq_df, sequence_column='sequence',
+                                                         sample_id_column='sample_id', k=3)
+            
+            # length_diff berdasarkan envelope (genome_length dari features = len(envelope))
+            features_df['length_diff'] = features_df['genome_length'].fillna(0) - ENVELOPE_REF_LEN
+            
+            # Merge features back
+            df = df.drop(columns=[seq_col, env_col] if env_col else [seq_col], errors='ignore')
+            df = df.merge(features_df, on='sample_id', how='left')
+            
+            # Add mutation features: hanya E_ (envelope) dari AA Substitutions
+            aa_col = 'AA Substitutions' if 'AA Substitutions' in df.columns else None
+            if aa_col:
+                mut_counts = df[aa_col].apply(lambda x: parse_aa_substitutions(x, envelope_only=True))
+                df['total_mutations'] = mut_counts
+                df['mutation_density'] = mut_counts / ENVELOPE_REF_LEN
+            elif 'total_mutations' not in df.columns:
+                df['total_mutations'] = 0
+                df['mutation_density'] = 0.0
+            if 'length_diff' not in df.columns:
+                df['length_diff'] = 0
         
         return df
     

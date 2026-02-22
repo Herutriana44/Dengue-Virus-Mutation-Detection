@@ -26,12 +26,25 @@ logger = logging.getLogger(__name__)
 class MLPipeline:
     """Main pipeline class untuk semua ML tasks"""
     
-    def __init__(self, dataset_dir='dataset', output_dir='results'):
+    def __init__(self, dataset_dir='dataset', output_dir='results', use_gisaid=None):
+        """
+        Args:
+            dataset_dir: Path ke folder dataset
+            output_dir: Path untuk output
+            use_gisaid: Jika True, gunakan from_gisaid_data.csv (DENV-2 Indonesia).
+                Jika None, auto-detect dari keberadaan file.
+        """
         self.dataset_dir = Path(dataset_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        self.cleaner = DataCleaner(dataset_dir=dataset_dir)
+        # Auto-detect GISAID: gunakan jika from_gisaid_data.csv ada
+        if use_gisaid is None:
+            use_gisaid = (self.dataset_dir / 'from_gisaid_data.csv').exists()
+        self.use_gisaid = use_gisaid
+        logger.info(f"Pipeline mode: {'GISAID (DENV-2 Indonesia)' if use_gisaid else 'Legacy'}")
+        
+        self.cleaner = DataCleaner(dataset_dir=dataset_dir, use_gisaid=use_gisaid)
         self.engineer = FeatureEngineer()
         self.baseline_classifier = BaselineClassifier()
         self.novelty_detector = NoveltyDetector()
@@ -49,9 +62,12 @@ class MLPipeline:
         logger.info("STAGE 1: Dataset Preparation")
         logger.info("=" * 70)
         
+        # GISAID (DENV-2 Indonesia): target = genotype. Legacy: target = serotype
+        label_col = 'genotype' if self.use_gisaid else 'serotype'
+        
         # Load and clean data
         self.cleaned_data = self.cleaner.run_full_cleaning(
-            label_column='serotype',
+            label_column=label_col,
             save_output=True
         )
         
@@ -70,10 +86,11 @@ class MLPipeline:
         # Group features
         self.engineer.group_features(self.cleaned_data)
         
-        # Prepare features
+        # Prepare features - GISAID: genotype, Legacy: serotype
+        target_col = 'genotype' if self.use_gisaid else 'serotype'
         self.X, self.y, self.feature_names = self.engineer.prepare_features(
             self.cleaned_data,
-            target_column='serotype'
+            target_column=target_col
         )
         
         logger.info(f"Feature matrix shape: {self.X.shape}")
@@ -253,6 +270,11 @@ class MLPipeline:
         if self.cleaned_data is None:
             raise ValueError("Please run Stage 1 first!")
         
+        # GISAID: hanya 1 serotipe (DENV-2), open-set detection tidak applicable
+        if self.use_gisaid:
+            logger.info("GISAID mode: Dataset hanya DENV-2. Task 3 (open-set serotype) di-skip.")
+            return None
+        
         # Get unique serotypes
         unique_serotypes = self.cleaned_data['serotype'].dropna().unique()
         logger.info(f"Available serotypes: {unique_serotypes}")
@@ -349,13 +371,20 @@ class MLPipeline:
         logger.info("Stage 6 completed!\n")
         return report
     
-    def run_full_pipeline(self, tasks=['baseline', 'novelty', 'open_set', 'interpretation']):
+    def run_full_pipeline(self, tasks=None):
         """
         Run full ML pipeline
         
         Args:
-            tasks: List tasks to run ['baseline', 'novelty', 'open_set', 'interpretation']
+            tasks: List tasks to run. Default: ['baseline', 'novelty', 'open_set', 'interpretation']
+                Untuk GISAID (1 serotipe): open_set di-skip otomatis
         """
+        if tasks is None:
+            tasks = ['baseline', 'novelty', 'open_set', 'interpretation']
+            if self.use_gisaid:
+                tasks = [t for t in tasks if t != 'open_set']
+                logger.info("GISAID mode: excluding open_set task (single serotype)")
+        
         logger.info("=" * 70)
         logger.info("STARTING FULL ML PIPELINE")
         logger.info("=" * 70)
@@ -368,15 +397,15 @@ class MLPipeline:
         # Stage 2: Feature Engineering
         self.run_stage2_feature_engineering()
         
-        # Task 1: Baseline Classification
+        # Task 1: Baseline Classification (genotype untuk GISAID, serotype untuk legacy)
         if 'baseline' in tasks:
             results['task1'] = self.run_task1_baseline_classification()
         
-        # Task 2: Novelty Detection
+        # Task 2: Novelty Detection (genotype)
         if 'novelty' in tasks:
             results['task2'] = self.run_task2_novelty_detection()
         
-        # Task 3: Open-set Detection
+        # Task 3: Open-set Detection (serotype - skip untuk GISAID)
         if 'open_set' in tasks:
             results['task3'] = self.run_task3_open_set_detection()
         
@@ -409,6 +438,11 @@ def main():
         help='Output directory for results and models'
     )
     parser.add_argument(
+        '--gisaid',
+        action='store_true',
+        help='Use GISAID data (from_gisaid_data.csv) - DENV-2 Indonesia only'
+    )
+    parser.add_argument(
         '--tasks',
         nargs='+',
         default=['baseline', 'novelty', 'open_set', 'interpretation'],
@@ -427,7 +461,8 @@ def main():
     # Initialize pipeline
     pipeline = MLPipeline(
         dataset_dir=args.dataset_dir,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        use_gisaid=args.gisaid
     )
     
     # Run pipeline

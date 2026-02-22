@@ -44,9 +44,9 @@ def main():
     parser.add_argument(
         '--tasks',
         nargs='+',
-        default=['baseline', 'novelty', 'open_set'],
+        default=['baseline', 'novelty'],
         choices=['baseline', 'novelty', 'open_set'],
-        help='Tasks untuk dijalankan'
+        help='Tasks untuk dijalankan (open_set tidak ada untuk model GISAID/DENV-2)'
     )
     
     args = parser.parse_args()
@@ -66,9 +66,10 @@ def main():
     # Check if input is file or directory
     input_path = Path(args.input)
     if input_path.is_dir():
-        # Load from dataset directory
+        # Load from dataset directory - auto-detect GISAID format
         from data_cleaning import DataCleaner
-        cleaner = DataCleaner(dataset_dir=str(input_path))
+        use_gisaid = (input_path / 'from_gisaid_data.csv').exists()
+        cleaner = DataCleaner(dataset_dir=str(input_path), use_gisaid=use_gisaid)
         cleaner.load_datasets()
         cleaner.merge_tables()
         input_data = cleaner.cleaned_data
