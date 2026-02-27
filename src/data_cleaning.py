@@ -4,6 +4,7 @@ Modul untuk cleaning dan merging dataset
 Mendukung: format legacy (sample_metadata, dll) dan GISAID (from_gisaid_data.csv)
 """
 
+import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -50,11 +51,16 @@ class DataCleaner:
         
         from gisaid_preprocessor import preprocess_gisaid_data
         
+        # Skip legacy merge jika env SKIP_LEGACY_MERGE=1 (untuk hindari timeout di IDE)
+        merge_legacy = os.environ.get('SKIP_LEGACY_MERGE', '0') != '1'
+        if not merge_legacy:
+            logger.info("SKIP_LEGACY_MERGE=1: hanya GISAID, tanpa merge legacy (lebih cepat)")
+        
         # Preprocess + merge dengan legacy (tanpa filter - dataset sudah sesuai)
         preprocess_gisaid_data(
             input_path=str(gisaid_path),
             output_dir=str(self.dataset_dir),
-            merge_with_legacy=True,
+            merge_with_legacy=merge_legacy,
             save_intermediate=True
         )
         

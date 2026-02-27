@@ -175,6 +175,7 @@ def _load_and_merge_legacy_datasets(dataset_dir):
     raw_seq_path = dataset_path / 'raw_sequences.csv'
     if raw_seq_path.exists() and 'envelope_sequence' in pd.read_csv(raw_seq_path, nrows=1).columns:
         raw_df = pd.read_csv(raw_seq_path)
+        logger.info(f"Extracting features from {len(raw_df)} legacy envelope_sequences (bisa memakan waktu)...")
         seq_df = extract_features_from_sequences(
             raw_df[['sample_id', 'envelope_sequence']].rename(columns={'envelope_sequence': 'sequence'}),
             sequence_column='sequence', sample_id_column='sample_id', k=3
@@ -249,12 +250,14 @@ def preprocess_gisaid_data(
     # Process GISAID ke format pipeline
     gisaid_merged = _process_gisaid_to_pipeline_format(df_gisaid)
     gisaid_merged['data_source'] = 'gisaid'
+    logger.info(f"GISAID processing done: {len(gisaid_merged)} samples")
     
     # Merge dengan dataset lain
     output_path = Path(output_dir)
     legacy_merged = None
     
     if merge_with_legacy:
+        logger.info("Loading legacy datasets (sample_metadata, raw_sequences, ...)...")
         legacy_merged = _load_and_merge_legacy_datasets(output_dir)
         if legacy_merged is not None:
             legacy_merged['data_source'] = 'legacy'
