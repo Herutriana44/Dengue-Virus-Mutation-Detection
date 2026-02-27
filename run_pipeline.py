@@ -55,6 +55,10 @@ if __name__ == "__main__":
         print("  - Interpretation: results/interpretation/")
         print("  - Cleaned dataset: ml_dataset_raw.csv")
         
+    except KeyboardInterrupt:
+        print("\n\nPipeline dihentikan (Ctrl+C). Jika Anda tidak menekan Ctrl+C, "
+              "mungkin ada timeout dari IDE/terminal.")
+        sys.exit(130)
     except Exception as e:
         print(f"\nERROR: {e}")
         import traceback
