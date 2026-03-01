@@ -158,6 +158,11 @@ def extract_features_from_sequences(df, sequence_column='sequence', sample_id_co
     # Fill NaN with 0
     features_df = features_df.fillna(0)
     
+    # Gunakan float32 untuk k-mer/gc_content (hemat ~50% memori vs float64)
+    float_cols = [c for c in features_df.columns if c != sample_id_column and features_df[c].dtype == np.float64]
+    for c in float_cols:
+        features_df[c] = features_df[c].astype(np.float32)
+    
     logger.info(f"Extracted features: {features_df.shape[1]} columns")
     logger.info(f"Features include: gc_content, genome_length, and {len([c for c in features_df.columns if c.startswith('kmer_')])} k-mer frequencies")
     

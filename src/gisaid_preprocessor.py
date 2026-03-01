@@ -73,6 +73,7 @@ def _process_gisaid_to_pipeline_format(df):
     """Convert GISAID DataFrame ke format pipeline (metadata + features + mutation + labels).
     - sample_id: NCBI Accession ID (untuk join dengan legacy)
     - Deteksi mutasi: gunakan envelope_sequence saja
+    - Deduplikasi sample_id untuk hindari Cartesian product saat merge (hemat memori)
     """
     df = df.copy()
     # Join key GISAID: NCBI Accession ID (bukan Accession ID)
@@ -81,6 +82,12 @@ def _process_gisaid_to_pipeline_format(df):
         df['sample_id'] = df[ncbicol].fillna(df.get('Accession ID', '')).astype(str)
     else:
         df['sample_id'] = df['Accession ID'] if 'Accession ID' in df.columns else df.index.astype(str)
+    
+    # Deduplikasi sample_id SEBELUM merge - hindari Cartesian product (252 dup -> 56 unique = 26M rows)
+    if df['sample_id'].duplicated().any():
+        before = len(df)
+        df = df.drop_duplicates(subset=['sample_id'], keep='first').copy()
+        logger.info(f"Deduplicated sample_id: {before} -> {len(df)} rows (avoid merge explosion)")
     
     # Metadata
     loc_col = df.get('Location_x', df.get('Location_y', pd.Series([''] * len(df))))
