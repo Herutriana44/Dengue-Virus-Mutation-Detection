@@ -1,0 +1,367 @@
+% Laporan Deteksi Mutasi Virus Dengue
+% Berdasarkan pipeline: dataset, preprocessing, hingga metode deteksi mutasi
+
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[bahasa]{babel}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, calc}
+
+\geometry{margin=2.5cm}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.5em}
+
+\title{\textbf{Laporan: Alur Deteksi Mutasi Virus Dengue}\\
+\large Dari Dataset, Preprocessing, hingga Metode Deteksi}
+\author{Sistem Deteksi Mutasi Virus Dengue}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+%==============================================================================
+\section{Pendahuluan}
+%==============================================================================
+
+Laporan ini mendokumentasikan alur lengkap sistem deteksi mutasi virus Dengue, mulai dari dataset mentah, tahapan preprocessing, hingga metode yang digunakan untuk deteksi mutasi dan klasifikasi. Sistem ini dirancang untuk mendeteksi mutasi pada genom virus Dengue tipe 2 (DENV-2) dari Indonesia menggunakan data GISAID dan fitur-fitur biologis.
+
+%==============================================================================
+\section{Alur (Flow) Lengkap Sistem}
+%==============================================================================
+
+\subsection{Diagram Alur}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    node distance=0.8cm and 1.2cm,
+    box/.style={rectangle, draw, rounded corners, minimum width=3.5cm, minimum height=0.6cm, align=center, font=\small},
+    stage/.style={rectangle, draw, fill=blue!10, rounded corners, minimum width=4cm, minimum height=0.7cm, align=center, font=\small\bfseries},
+    arrow/.style={-{Stealth[length=2mm]}, thick}
+]
+
+% Raw data
+\node[stage] (raw) {DATA MENTAH};
+\node[box, below=0.4cm of raw] (gisaid) {GISAID TSV + FASTA\\\textit{from\_gisaid\_data.csv}};
+\node[box, right=0.5cm of gisaid] (legacy) {Legacy: sample\_metadata,\\sequence\_features,\\mutation\_profile,\\label\_table};
+
+% Preprocessing
+\node[stage, below=1.2cm of gisaid] (preproc) {PREPROCESSING};
+\node[box, below=0.4cm of preproc] (gisaidproc) {gisaid\_preprocessor.py\\• Ekstraksi envelope (937--2423)\\• Parse AA Substitutions (E\_ only)\\• Hitung total\_mutations, mutation\_density};
+
+% Data cleaning
+\node[stage, below=1.2cm of gisaidproc] (clean) {DATA CLEANING};
+\node[box, below=0.4cm of clean] (dataclean) {data\_cleaning.py\\• Merge tabel (sample\_id)\\• Filter missing labels\\• Filter outlier genome\_length};
+
+% Feature engineering
+\node[stage, below=1.2cm of dataclean] (feat) {FEATURE ENGINEERING};
+\node[box, below=0.4cm of feat] (feateng) {feature\_engineering.py\\• K-mer (k=3), GC content\\• One-hot encode kategorikal\\• StandardScaler};
+
+% ML / Detection
+\node[stage, below=1.2cm of feateng] (ml) {DETEKSI MUTASI / ML};
+\node[box, below=0.4cm of ml] (tasks) {Task 1: RF/XGBoost (klasifikasi)\\Task 2: Isolation Forest (novelty)\\Task 3: Autoencoder (open-set)};
+
+% Arrows
+\draw[arrow] (raw) -- (preproc);
+\draw[arrow] (preproc) -- (gisaidproc);
+\draw[arrow] (gisaidproc) -- (clean);
+\draw[arrow] (clean) -- (dataclean);
+\draw[arrow] (dataclean) -- (feat);
+\draw[arrow] (feat) -- (feateng);
+\draw[arrow] (feateng) -- (ml);
+\draw[arrow] (ml) -- (tasks);
+
+\end{tikzpicture}
+\caption{Alur lengkap dari data mentah hingga deteksi mutasi.}
+\label{fig:flow}
+\end{figure}
+
+\subsection{Deskripsi Tahapan}
+
+\begin{enumerate}
+    \item \textbf{Data Mentah:} Data dari GISAID (TSV metadata + FASTA) atau dataset legacy yang berisi metadata, sekuens, dan anotasi mutasi.
+    
+    \item \textbf{Preprocessing (GISAID):} Ekstraksi region envelope (posisi 937--2423, 1486 nukleotida), parsing AA Substitutions untuk menghitung mutasi protein E saja, ekstraksi fitur k-mer dan GC content.
+    
+    \item \textbf{Data Cleaning:} Penggabungan tabel berdasarkan \texttt{sample\_id}, penghapusan sampel dengan label hilang, dan filter outlier berdasarkan panjang genom.
+    
+    \item \textbf{Feature Engineering:} Pengelompokan fitur (X\_seq, X\_mut, X\_meta), one-hot encoding untuk kategorikal, dan penskalaan numerik dengan StandardScaler.
+    
+    \item \textbf{Deteksi Mutasi:} Tiga tugas ML---klasifikasi baseline (RF/XGBoost), deteksi novelty genotipe (Isolation Forest), dan deteksi open-set serotipe (Autoencoder).
+\end{enumerate}
+
+%==============================================================================
+\section{Sampel Data pada Setiap Tahapan}
+%==============================================================================
+
+\subsection{Data Mentah (Raw Dataset)}
+
+\subsubsection{Format GISAID (\texttt{from\_gisaid\_data.csv})}
+
+Data dari notebook \texttt{GetDataDengueVirusGenome.ipynb} setelah scraping GISAID. Kolom utama: NCBI Accession ID, Sequence (full genome), AA Substitutions, Serotype, Genotype, Location, Year, dll.
+
+\begin{table}[h]
+\centering
+\caption{Sampel format GISAID mentah (kolom utama)}
+\small
+\begin{tabular}{@{}lllll@{}}
+\toprule
+\textbf{NCBI Accession ID} & \textbf{Serotype} & \textbf{Genotype} & \textbf{AA Substitutions} & \textbf{Year} \\
+\midrule
+KU509268.1 & DENV2 & II & (E\_Q52H, NS5\_I637A, ...) & 2009 \\
+KM204118.1 & DENV2 & IV & (E\_V123A, ...) & 1975 \\
+AY858035.2 & DENV2 & II & (E\_K128R, E\_T270A, ...) & 1975 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Metadata Legacy (\texttt{sample\_metadata.csv})}
+
+\begin{table}[h]
+\centering
+\caption{Sampel \texttt{sample\_metadata.csv} (5 baris pertama)}
+\small
+\begin{tabular}{@{}lllllll@{}}
+\toprule
+\textbf{sample\_id} & \textbf{description} & \textbf{serotype} & \textbf{genotype} & \textbf{country} & \textbf{year} & \textbf{host} \\
+\midrule
+KU509268.1 & hDenV2/Indonesia/BA-BNITM-671/2009 & DENV2 & II & & 2009 & Human \\
+KM204118.1 & hDenV2/Indonesia/un-NUSMS-0000009/1975 & DENV2 & IV & & 1975 & Human \\
+AY858035.2 & hDenV2/Indonesia/un-NUSMS-0000008/1975 & DENV2 & II & & 1975 & Human \\
+KP406804.1 & hDenV2/Indonesia/un-NUSMS-0000007/1977 & DENV2 & I & & 1977 & Human \\
+LC666719.1 & hDenV2/Indonesia/un-NUSMS-0000005/1976 & DENV2 & II & & 1976 & Human \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Sekuens untuk Inference (\texttt{template\_inference\_sequences.csv})}
+
+Format input untuk inference: \texttt{sample\_id} dan \texttt{sequence} (envelope atau full genome).
+
+\begin{table}[h]
+\centering
+\caption{Sampel \texttt{template\_inference\_sequences.csv}}
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{sample\_id} & \textbf{sequence} (50 karakter pertama...) \\
+\midrule
+SAMPLE\_001 & AGTTGTTAGTCTGTGTGGACCGACAAGGACAGTTCCAAATCGGAAGCTTGCTTAA... \\
+SAMPLE\_002 & AGTTGTTAGTCTGTGTGGACCGACAAGGACAGTTCCAAATCGGAAGCTTGCTTAA... \\
+SAMPLE\_003 & AGTTGTTAGTCTGTGTGGACCGACAAGGACAGTTCCAAATCGGAAGCTTGCTTAA... \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%------------------------------------------------------------------------------
+\subsection{Data Setelah Preprocessing}
+%------------------------------------------------------------------------------
+
+\subsubsection{Profil Mutasi (\texttt{mutation\_profile.csv})}
+
+\begin{table}[h]
+\centering
+\caption{Sampel \texttt{mutation\_profile.csv}}
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{sample\_id} & \textbf{total\_mutations} & \textbf{mutation\_density} & \textbf{length\_diff} \\
+\midrule
+KU509268.1 & 12.0 & 0.00808 & 0.0 \\
+KM204118.1 & 4.0 & 0.00269 & 0.0 \\
+AY858035.2 & 10.0 & 0.00673 & 0.0 \\
+KP406804.1 & 11.0 & 0.00740 & 0.0 \\
+LC666719.1 & 8.0 & 0.00538 & 0.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textit{Formula:} $\text{mutation\_density} = \frac{\text{total\_mutations}}{\text{ENVELOPE\_REF\_LEN}}$ dengan ENVELOPE\_REF\_LEN = 1486 nukleotida.
+
+\subsubsection{Fitur Sekuens (\texttt{sequence\_features.csv})}
+
+Sebagian kolom (64 k-mer + gc\_content + total\_mutations + mutation\_density + length\_diff):
+
+\begin{table}[h]
+\centering
+\caption{Sampel \texttt{sequence\_features.csv} (kolom terpilih)}
+\small
+\begin{tabular}{@{}llllll@{}}
+\toprule
+\textbf{sample\_id} & \textbf{kmer\_AAA} & \textbf{kmer\_AAT} & \textbf{gc\_content} & \textbf{total\_mutations} & \textbf{mutation\_density} \\
+\midrule
+KU509268.1 & 0.0418 & 0.0209 & 0.447 & 12.0 & 0.00808 \\
+KM204118.1 & 0.0411 & 0.0202 & 0.454 & 4.0 & 0.00269 \\
+AY858035.2 & 0.0398 & 0.0216 & 0.452 & 10.0 & 0.00673 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Tabel Label (\texttt{label\_table.csv})}
+
+\begin{table}[h]
+\centering
+\caption{Sampel \texttt{label\_table.csv}}
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{sample\_id} & \textbf{serotype} & \textbf{genotype} & \textbf{known\_genotype} \\
+\midrule
+KU509268.1 & DENV2 & II & True \\
+KM204118.1 & DENV2 & IV & True \\
+AY858035.2 & DENV2 & II & True \\
+KP406804.1 & DENV2 & I & True \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%------------------------------------------------------------------------------
+\subsection{Data Setelah Data Cleaning}
+%------------------------------------------------------------------------------
+
+\subsubsection{Dataset yang Dibersihkan (\texttt{ml\_dataset\_raw.csv})}
+
+Hasil merge semua tabel + filter missing labels + filter outlier. Berisi semua kolom dari metadata, sequence\_features, mutation\_profile, dan label\_table.
+
+\begin{table}[h]
+\centering
+\caption{Sampel \texttt{ml\_dataset\_raw.csv} (kolom terpilih)}
+\small
+\begin{tabular}{@{}llllll@{}}
+\toprule
+\textbf{sample\_id} & \textbf{serotype} & \textbf{genotype} & \textbf{total\_mutations} & \textbf{mutation\_density} & \textbf{year} \\
+\midrule
+KU509268.1 & DENV2 & II & 12.0 & 0.00808 & 2009 \\
+KM204118.1 & DENV2 & IV & 4.0 & 0.00269 & 1975 \\
+AY858035.2 & DENV2 & II & 10.0 & 0.00673 & 1975 \\
+KP406804.1 & DENV2 & I & 11.0 & 0.00740 & 1977 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%------------------------------------------------------------------------------
+\subsection{Data untuk Deteksi Mutasi (Input ML)}
+%------------------------------------------------------------------------------
+
+Setelah feature engineering, fitur dikelompokkan menjadi:
+
+\begin{itemize}
+    \item \textbf{X\_seq:} 64 k-mer (kmer\_AAA, kmer\_AAC, ...) + gc\_content
+    \item \textbf{X\_mut:} total\_mutations, mutation\_density, length\_diff
+    \item \textbf{X\_meta:} year, host, lineage, dll (one-hot encoded)
+\end{itemize}
+
+Matriks fitur $X$ dinormalisasi dengan StandardScaler sebelum digunakan sebagai input model.
+
+\begin{table}[h]
+\centering
+\caption{Sampel fitur setelah scaling (nilai contoh untuk 3 sampel)}
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{sample\_id} & \textbf{scaled\_total\_mutations} & \textbf{scaled\_mutation\_density} & \textbf{scaled\_gc\_content} \\
+\midrule
+KU509268.1 & $\approx$ 0.82 & $\approx$ 0.85 & $\approx$ $-$0.12 \\
+KM204118.1 & $\approx$ $-$1.21 & $\approx$ $-$1.18 & $\approx$ 0.45 \\
+AY858035.2 & $\approx$ 0.21 & $\approx$ 0.22 & $\approx$ 0.08 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%==============================================================================
+\section{Metode Deteksi Mutasi}
+%==============================================================================
+
+\subsection{Deteksi Mutasi Biologis (Pre-ML)}
+
+\begin{itemize}
+    \item \textbf{Sumber GISAID:} Parsing string \texttt{AA Substitutions} (format: \texttt{(NS5\_I637A,E\_Q52H,...)}). Hanya mutasi dengan prefiks \texttt{E\_} (protein envelope) yang dihitung.
+    \item \textbf{Formula:} $\text{mutation\_density} = \frac{\text{total\_mutations}}{1486}$
+    \item \textbf{length\_diff:} Selisih panjang sekuens envelope dengan referensi (1486 nt).
+\end{itemize}
+
+\subsection{Deteksi Berbasis Machine Learning}
+
+\begin{table}[h]
+\centering
+\caption{Sumber: \texttt{task1\_baseline\_classification.py}, \texttt{task2\_novelty\_detection.py}, \texttt{task3\_open\_set\_detection.py}}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Task} & \textbf{Metode} & \textbf{Tujuan} & \textbf{Output} \\
+\midrule
+Task 1 & Random Forest, XGBoost & Klasifikasi genotipe/serotipe & Prediksi kelas \\
+Task 2 & Isolation Forest, One-Class SVM & Deteksi genotipe novel & Anomaly score \\
+Task 3 & Autoencoder (MLP) & Deteksi serotipe divergen (open-set) & Reconstruction error \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Task 1: Baseline Classification}
+
+\begin{itemize}
+    \item \textbf{Data:} Fitur X\_seq + X\_mut + X\_meta (dengan label serotype/genotype).
+    \item \textbf{Model:} Random Forest dan XGBoost.
+    \item \textbf{Evaluasi:} Stratified K-Fold, accuracy, F1-score.
+\end{itemize}
+
+\subsubsection{Task 2: Novelty Detection}
+
+\begin{itemize}
+    \item \textbf{Data:} Hanya sampel dengan genotipe known untuk training.
+    \item \textbf{Model:} Isolation Forest (anomaly detection).
+    \item \textbf{Output:} \texttt{anomaly\_score}--- semakin tinggi, semakin novel.
+\end{itemize}
+
+\subsubsection{Task 3: Open-Set Detection}
+
+\begin{itemize}
+    \item \textbf{Data:} Hanya serotipe tertentu untuk training.
+    \item \textbf{Model:} Autoencoder (MLP encoder-decoder).
+    \item \textbf{Output:} \texttt{reconstruction\_error}--- semakin tinggi, semakin divergen (potensi serotipe baru).
+\end{itemize}
+
+%==============================================================================
+\section{Ringkasan File dan Output}
+%==============================================================================
+
+\begin{table}[h]
+\centering
+\caption{Ringkasan file dataset dan output}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{File} & \textbf{Tahap} & \textbf{Keterangan} \\
+\midrule
+from\_gisaid\_data.csv & Mentah & Ekspor GISAID (NCBI ID, Sequence, AA Substitutions, dll) \\
+raw\_sequences.csv & Mentah & Sekuens envelope (sample\_id, sequence) \\
+sample\_metadata.csv & Mentah & Metadata sample \\
+sequence\_features.csv & Preprocessing & 64 k-mer + gc\_content + total\_mutations + mutation\_density + length\_diff \\
+mutation\_profile.csv & Preprocessing & total\_mutations, mutation\_density, length\_diff \\
+label\_table.csv & Mentah & serotype, genotype, known\_genotype \\
+merged\_dataset.csv & Preprocessing & Gabungan dari semua tabel \\
+ml\_dataset\_raw.csv & Cleaning & Setelah filter missing labels dan outlier \\
+X (DataFrame) & Feature Eng. & Matriks fitur setelah scaling (input ML) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%==============================================================================
+\section{Kesimpulan}
+%==============================================================================
+
+Alur deteksi mutasi virus Dengue dimulai dari data mentah GISAID atau legacy, melalui preprocessing (ekstraksi envelope, parsing AA Substitutions, ekstraksi fitur k-mer), data cleaning (merge, filter), dan feature engineering (encoding, scaling). Data yang digunakan untuk deteksi mutasi meliputi fitur sekuens (k-mer, GC content), fitur mutasi (total\_mutations, mutation\_density, length\_diff), dan metadata. Metode deteksi terdiri dari deteksi biologis (parsing AA Substitutions) dan deteksi berbasis ML (klasifikasi, novelty detection, open-set detection).
+
+\end{document}
